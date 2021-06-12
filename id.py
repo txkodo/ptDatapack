@@ -9,3 +9,6 @@ def gen_scoreholder_id():
 
 def gen_function_id():
   return ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(16))
+
+def gen_datapath_id():
+  return ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(16))
