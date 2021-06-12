@@ -27,7 +27,6 @@ class MainModule(Module):
 
     def __exit__(self,*args):
         for func in self.funcs:
-            print(func)
             self > func
 
 def isContext(context):
@@ -82,7 +81,7 @@ class Function(Variable):
         if type(result) is str:
             self.commands.append(result)
         # 処理結果の場合コンテクストを追加
-        if isContext(result):
+        elif isContext(result):
             self.commands.extend(result)
         # ファンクション系の場合呼び出し結果を追加
         elif type(result) in (Function,SubFunction):
@@ -209,6 +208,10 @@ def toData(value, path, holder) -> tuple[list[str],'Data',str]:
         result   = t.__class__(path, holder)
         context = [f'data modify {result.expression} set from {value.expression}']
         text     = '-2b'
+    # boolの内容
+    elif t is bool:
+        result = BoolData(path, holder)
+        text     = '1b' if value else '0b'
     # strの内容
     elif t is str:
         result = StrData(path, holder)
@@ -224,7 +227,6 @@ def toData(value, path, holder) -> tuple[list[str],'Data',str]:
         text     = '-2b'
     # dictの内容
     elif t is dict:
-        value:dict
         result = Compound(path, holder)
         texts = []
         for k,v in value.items():
@@ -233,7 +235,7 @@ def toData(value, path, holder) -> tuple[list[str],'Data',str]:
             context.extend(c_contexts)
             result.setitem(k,c_result)
         text = '{'+','.join(texts)+'}'
-    
+
     return context , result , text
 
 class StorageNamespace:
@@ -251,16 +253,14 @@ StorageNamespace.default = StorageNamespace('-')
 class DataSetError(Exception):pass
 
 class Data(Variable):
-    def __init__(self, path, holder:StorageNamespace, contexts: list[Union[str, 'Variable']] = [], value = None , relpath:str= None ) -> None:
+    def __init__(self, path, holder:StorageNamespace, contexts: list[Union[str, 'Variable']] = [] ) -> None:
         super().__init__(contexts=contexts)
         # ストレージ名前空間やエンティティ名など
         self.holder = holder
-        # 親要素からの相対パス( [0] .a [{a=2}])
-        self.relpath = relpath
         # 絶対パス
         self.path = path or gen_datapath_id()
-        # 内容？
-        self.value = value
+
+        self.value = None
     # # 別のストレージからデータを移動
     # def move(self,path_from:'Data'):
     #     self.addcontext([f'data modify {self.expression} set from {path_from.expression}'])
@@ -268,7 +268,9 @@ class Data(Variable):
     # 文字化されたものをデータに代入
     @command
     def set(self,value:str):
-        return [f'data modify {self.expression} set value {value}']
+        context , result , text =toData(value,self.path,self.holder)
+        self.value = result.value
+        return [f'data modify {self.expression} set value {text}'] + context
 
     # # データを違う場所にコピー
     # def copyWithParent(self,path,holder,parent):
@@ -281,51 +283,37 @@ class Data(Variable):
         return f'{self.holder.expression} {self.path}'
 
 class BoolData(Data):
-    def __init__(self, path, value, contexts: list[Union[str, 'Variable']] = [], subcommand:str=None) -> None:
-        super().__init__(value, path, contexts=contexts)
-        self.value:bool
-        self.subcommand = subcommand
+    def __init__(self, path:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
+        super().__init__( path,holder,contexts=contexts)
 
-    def eval(self):
-        return self.subcommand or f'{self.path}{{{self.value}:1b}}'
 
 class IntData(Data):
     def __init__(self, path:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
         super().__init__( path,holder,contexts=contexts)
 
-    @command
-    def set(self, value:Union['IntData',int,'Score']) -> ResultVariable:
-        context , result , text =toData(value,self.path,self.holder)
-        self:IntData = result
-        return super().set(text) + context
-
     # def eval(self):
     #     return self.subcommand or f'{self.path}{{{self.value}:1b}}'
 
 class StrData(Data):
-    def __init__(self, path, value, contexts: list[Union[str, 'Variable']] = []) -> None:
-        super().__init__(value, path, contexts=contexts)
+    def __init__(self, path:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
+        super().__init__( path,holder,contexts=contexts)
 
-    @command
-    def set(self,value:Union[str,'StrData']):
-        context , result , text =toData(value,self.path,self.holder)
-        self:StrData = result
-        return super().set(text) + context
 
 class Compound(Data):
     def __init__(self, path:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
         super().__init__( path,holder,contexts=contexts)
         self.value = {}
-    
-    @command
-    def set(self,value:Union[dict,'Compound']):
-        context , result , text =toData(value,self.path,self.holder)
-        self:Compound = result
-        return super().set(text) + context
 
     # 設定時のパスチェックは行われないので注意    
     def setitem(self,key,value):
         self.value[key] = value
+
+    def __getitem__(self,key):
+        return self.value[key]
+    
+    def set(self, value: str):
+        r = super().set(value)
+        return r
 
 # class Comparison(ResultVariable):
 #     def __init__(self, subcommand, contexts: list[Union[str, 'Variable']]) -> None:
