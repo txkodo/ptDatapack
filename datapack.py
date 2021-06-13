@@ -1,16 +1,17 @@
 import mcpath
 from os import name
-from pathlib import Path, PosixPath
 from typing import Callable, Iterable, TypeVar, Union
 from .id import gen_function_id, gen_objective_id, gen_scoreholder_id, gen_datapath_id
 from .mcpath import McPath
 
 
+# モジュール(意味を持ったファンクション群)
 class Module:
     def __init__(self, main: 'MainModule', path: str) -> None:
         self.path = main.path/path
         (self.path/'-').rmtree(ignore_errors=True)
 
+# 名前空間オブジェクト
 class MainModule(Module):
     def __init__(self, path: McPath,funcnames:Iterable=[]) -> None:
         path.setDirectory('functions')
@@ -32,6 +33,7 @@ class MainModule(Module):
 def isContext(context):
     return type(context) is list and all(map(lambda x:type(x) is str,context))
 
+# コマンドの型戻り値をチェックをするデコレータ
 T = TypeVar('T')
 def command(func:T) -> T:
     def inner(*args,**kwargs) -> list[str]:
@@ -40,6 +42,7 @@ def command(func:T) -> T:
         return result
     return inner
 
+# スコアやデータ等のスーパークラス
 class Variable:
     def __init__(self,contexts:list[Union[str,'Variable']]=[]) -> None:
         self.contexts = []
@@ -64,6 +67,7 @@ class ResultVariable(Variable):
 
 class CommandAddtionFailed(Exception):pass
 
+# ファンクション
 class Function(Variable):
     called = set()
     def __init__(self,name:str=None,contexts=[]) -> None:
@@ -177,6 +181,7 @@ class Function(Variable):
 
 class NonBakebleError(Exception):pass
 
+# functionを呼び出すexecuteのサブコマンド
 class SubFunction(Variable):
     def __init__(self, subcommand:str, function:Function,contexts:list[Union[str,'Variable']]=[]) -> None:
         super().__init__(contexts=contexts)
@@ -238,6 +243,7 @@ def toData(value, path, holder) -> tuple[list[str],'Data',str]:
 
     return context , result , text
 
+# ストレージ名前空間
 class StorageNamespace:
     name_set = set()
     default:'StorageNamespace'
@@ -250,8 +256,11 @@ class StorageNamespace:
         return f'storage {self.namespace}:{self.id}'
 StorageNamespace.default = StorageNamespace('-')
 
+# class Comparison()
+
 class DataSetError(Exception):pass
 
+# nbt全般のスーパークラス
 class Data(Variable):
     def __init__(self, path, holder:StorageNamespace, contexts: list[Union[str, 'Variable']] = [] ) -> None:
         super().__init__(contexts=contexts)
@@ -304,7 +313,7 @@ class Compound(Data):
         super().__init__( path,holder,contexts=contexts)
         self.value = {}
 
-    # 設定時のパスチェックは行われないので注意    
+    # 設定時のパスチェックは行われないので注意
     def setitem(self,key,value):
         self.value[key] = value
 
@@ -323,6 +332,7 @@ class Compound(Data):
 
 class ObjectiveError(Exception): pass
 
+# Scoreboard Objective
 class Objective:
     name_set = set()
     default:'Objective'
@@ -340,6 +350,7 @@ Objective.default = Objective('-')
 
 class ScoreHolderError(Exception):pass
 
+# Scoreboard
 class Score(Variable):
     name_set = set()
 
