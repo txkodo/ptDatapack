@@ -1,15 +1,18 @@
 import mcpath
-from os import name
-from typing import Callable, Iterable, TypeVar, Union
+from os import name, path
+from typing import Callable, Container, Iterable, TypeVar, Union
 from .id import gen_function_id, gen_objective_id, gen_scoreholder_id, gen_datapath_id
 from .mcpath import McPath
-
+import re
 
 # モジュール(意味を持ったファンクション群)
 class Module:
     def __init__(self, main: 'MainModule', path: str) -> None:
         self.path = main.path/path
         (self.path/'-').rmtree(ignore_errors=True)
+    
+    def func(self,name=None):
+        return Function(self.path,name)
 
 # 名前空間オブジェクト
 class MainModule(Module):
@@ -19,7 +22,7 @@ class MainModule(Module):
         (self.path/'-').rmtree(ignore_errors=True)
         self.funcs:list[Function] = []
         for funcname in funcnames:
-            func = Function(funcname)
+            func = self.func(funcname)
             setattr(self,funcname,func)
             self.funcs.append(func)
 
@@ -31,54 +34,64 @@ class MainModule(Module):
             self > func
 
 def isContext(context):
-    return type(context) is list and all(map(lambda x:type(x) is str,context))
+    return type(context) in (str,ResultVariable)
 
 # コマンドの型戻り値をチェックをするデコレータ
 T = TypeVar('T')
 def command(func:T) -> T:
-    def inner(*args,**kwargs) -> list[str]:
+    def inner(*args,**kwargs) -> 'ResultVariable':
         result = func(*args,**kwargs)
-        assert isContext(result), 'command must return context:list[str]'
+        assert isContext(result), f'command must return ResultVariable instance. not {result} in {func}'
         return result
     return inner
 
 # スコアやデータ等のスーパークラス
 class Variable:
     def __init__(self,contexts:list[Union[str,'Variable']]=[]) -> None:
-        self.contexts = []
-        self.addcontext(contexts)
+        self.__contexts = []
+        self.addcontext(*contexts)
 
-    def addcontext(self,contexts=[]) -> None:
+    def addcontext(self,*contexts) -> None:
         commands = []
         for context in contexts:
+            assert isinstance(context,(str,Variable)),f'str or Variable is allowed in context. not {type(context)}\n{context}.'
+            commands.append(context)
+
+        self.__contexts.extend(commands)
+
+    def reflesh(self) -> list[str]:
+        commands = [] 
+        for context in self.__contexts:
             if type(context) is str:
                 commands.append(context)
             elif isinstance(context,Variable):
                 commands.extend(context.reflesh())
-        self.contexts.extend(commands)
+            else:
+                assert False, f'{type(context)} is not allowed in context.'
 
-    def reflesh(self) -> list[str]:
-        commands = self.contexts
-        self.contexts = []
+        self.__contexts = []
         return commands
 
 class ResultVariable(Variable):
-    pass
+    def __init__(self, *contexts:Union[str, 'Variable']) -> None:
+        super().__init__(contexts=contexts)
 
 class CommandAddtionFailed(Exception):pass
 
 # ファンクション
 class Function(Variable):
     called = set()
-    def __init__(self,name:str=None,contexts=[]) -> None:
+    def __init__(self,path:McPath,name:str=None,contexts=[]) -> None:
         super().__init__(contexts=contexts)
         self.commands:list[Union[str,Function]] = []
         self.__calling = False
         self.__baked = False
+        self.hasname = bool(name)
         self.name = (name or ( '-/' + gen_function_id())) + '.mcfunction'
+        self.path = path/self.name
 
     def __lt__(self,value:Module):
-      self.bake(value.path)
+        self.bake()
 
     def __gt__(self,result:Union[str,list[str],'Function']):
         # 文字列の場合追記
@@ -86,7 +99,7 @@ class Function(Variable):
             self.commands.append(result)
         # 処理結果の場合コンテクストを追加
         elif isContext(result):
-            self.commands.extend(result)
+            self.commands.extend(result.reflesh())
         # ファンクション系の場合呼び出し結果を追加
         elif type(result) in (Function,SubFunction):
             self.commands.extend(result.reflesh())
@@ -101,40 +114,45 @@ class Function(Variable):
     def __exit__(self,*args):
         pass
 
-    def call(self,dirpath:McPath,join=True):
+    def call(self):
+        # 再帰して帰ってきた場合
         if self.__calling:
+          # ファンクションファイルに出力フラグを立てる
           self.__baked = True
+          # 呼び出し文を返す
           return [f'function {self.path.function_path}']
+        # 再帰チェックのためのフラグを立てる
         self.__calling = True
-        texts = self.textify(dirpath)
-        if self.__baked:
-          self.bake(dirpath.path)
+        # 内容の文字列化
+        texts = self.textify()
+        # 出力フラグがあるもしくはフェイル名がある場合はファイルに出力
+        if self.__baked or self.hasname:
+          self.bake()
           return [f'function {self.path.function_path}']
         self.__calling = False
         self.__baked = False
         return texts
 
-    def textify(self,dirpath:McPath):
+    def textify(self):
         commands = []
         for command in self.commands:
             if type(command) is str:
                 commands.append(command)
             elif type(command) in (Function,SubFunction):
-                commands.extend(command.call(dirpath))
+                commands.extend(command.call())
         return commands
 
-    def bake(self,dirpath:McPath):
-        path = dirpath/self.name
-        path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_text('\n'.join(self.textify(dirpath)))
+    def bake(self):
+        self.path.parent.mkdir(parents=True,exist_ok=True)
+        self.path.write_text('\n'.join(self.textify()))
 
     def Child(self):
-        new = Function()
+        new = Function(self.path.parent)
         self > new
         return new
 
     def _subcommand(self,value:str) -> 'Function':
-        new = Function()
+        new = Function(self.path.parent)
         subcommand = SubFunction(value,new)
         self > subcommand
         return new
@@ -144,9 +162,17 @@ class Function(Variable):
 
     def As(self,entity:str):
         return self._subcommand('as ' + entity)
-    
-    def If(self,condition:str):
-        return self._subcommand('if '+condition)
+
+    def If(self,condition:Union[str,'Comparison','Data']):
+        if type(condition) is str:
+            return self._subcommand('if '+condition)
+        elif type(condition) is Comparison:
+            self.addcontext(condition)
+            return self._subcommand('if '+ condition.expression)
+        elif isinstance(condition,Data):
+            self.addcontext(condition)
+            return self._subcommand('if '+ condition.check_eixst().expression)
+        assert False, f'{type(condition)} is not allowed in Subfunction.If'
 
     def Unless(self,condition:str):
         return self._subcommand('unless '+condition)
@@ -188,8 +214,8 @@ class SubFunction(Variable):
         self.function = function
         self.subcommand = subcommand
 
-    def call(self,dirpath:mcpath):
-        texts = self.function.textify(dirpath)
+    def call(self):
+        texts = self.function.textify()
         if len(texts) == 0:
             # コマンドがない場合なにも出力しない
             return ''
@@ -197,51 +223,14 @@ class SubFunction(Variable):
             # 一行ファンクションの場合exexcuteに埋め込む
             return ['execute ' + self.subcommand + ' run ' + texts[0]]
         # 複数行ファンクションの場合焼き付けてexexcuteから呼び出す
-        self.function.bake(dirpath)
-        return ['execute ' + self.subcommand + ' run function ' + (dirpath/self.function.name).function_path]
+        self.function.bake()
+        return ['execute ' + self.subcommand + ' run function ' + (self.function.path).function_path]
 
-
-# pythonの組み込み型等の内容をmcDataに変換
-def toData(value, path, holder) -> tuple[list[str],'Data',str]:
-    t = type(value)
-    context = []
-    result  = None
-    text    = ''
-    # Dataのインスタンスだった場合
-    if isinstance(t,Data):
-        value:Data
-        result   = t.__class__(path, holder)
-        context = [f'data modify {result.expression} set from {value.expression}']
-        text     = '-2b'
-    # boolの内容
-    elif t is bool:
-        result = BoolData(path, holder)
-        text     = '1b' if value else '0b'
-    # strの内容
-    elif t is str:
-        result = StrData(path, holder)
-        text     = '"'+value+'"'
-    # intの内容
-    elif t is int:
-        result = IntData(path, holder)
-        text     = str(value)
-    # Scoreの内容
-    elif t is Score:
-        result = IntData(path, holder)
-        context = [f'execute store result {result.expression} int 1 run {value.get()[0]}']
-        text     = '-2b'
-    # dictの内容
-    elif t is dict:
-        result = Compound(path, holder)
-        texts = []
-        for k,v in value.items():
-            c_contexts,c_result,c_text = toData(v,path+'.'+k,holder)
-            texts.append(k + ':' + c_text)    
-            context.extend(c_contexts)
-            result.setitem(k,c_result)
-        text = '{'+','.join(texts)+'}'
-
-    return context , result , text
+# 比較演算結果 execute ifのサブコマンドとなったりBoolDataにキャストしたりできる。
+class Comparison(Variable):
+    def __init__(self, expression:str, contexts: list[Union[str, 'Variable']] = []) -> None:
+        super().__init__(contexts=contexts)
+        self.expression = expression
 
 # ストレージ名前空間
 class StorageNamespace:
@@ -256,30 +245,55 @@ class StorageNamespace:
         return f'storage {self.namespace}:{self.id}'
 StorageNamespace.default = StorageNamespace('-')
 
-# class Comparison()
-
 class DataSetError(Exception):pass
 
 # nbt全般のスーパークラス
 class Data(Variable):
-    def __init__(self, path, holder:StorageNamespace, contexts: list[Union[str, 'Variable']] = [] ) -> None:
+    convertmap = lambda:{
+            bool:BoolData,
+            int:IntData,
+            Score:IntData,
+            str:StrData,
+            dict:Compound
+        }
+    def __init__(self, name:str=None, parent:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
         super().__init__(contexts=contexts)
         # ストレージ名前空間やエンティティ名など
         self.holder = holder
-        # 絶対パス
-        self.path = path or gen_datapath_id()
+        # パスの最後の部分( .a [i] [{n=1}])
+        self.name   = name or gen_datapath_id()
+        # パスの最後以外の部分(x.y.z)
+        self.parent = parent or ''
 
         self.value = None
     # # 別のストレージからデータを移動
     # def move(self,path_from:'Data'):
     #     self.addcontext([f'data modify {self.expression} set from {path_from.expression}'])
 
-    # 文字化されたものをデータに代入
+    # データに代入
     @command
-    def set(self,value:str):
-        context , result , text =toData(value,self.path,self.holder)
-        self.value = result.value
-        return [f'data modify {self.expression} set value {text}'] + context
+    def set(self,value):
+        nbtstr,context = self._set(value)
+        self.addcontext(f'data modify {self.expression} set value {nbtstr}',*context)
+        return ResultVariable(self)
+
+    @staticmethod
+    def genInstance(name,parent,holder,value) -> 'Data':
+        return {
+            bool:BoolData,
+            int:IntData,
+            Score:IntData,
+            str:StrData,
+            dict:Compound
+        }[type(value)](name,parent,holder)
+
+    def check_eixst(self):
+        return Comparison(f'data {self.expression}',[self])
+
+    def __eq__(self,value:str):
+        match = re.fullmatch(r'\[\s*\{(.*)\}\s*\]',value)
+        assert not match, 's.t[{a:x}]に対して同値比較はできません'
+        return Comparison(f'data {self.holder.expression} {self.parent}{{{self.name[1:]}:{value}}}',[self])
 
     # # データを違う場所にコピー
     # def copyWithParent(self,path,holder,parent):
@@ -289,46 +303,69 @@ class Data(Variable):
 
     @property
     def expression(self):
-        return f'{self.holder.expression} {self.path}'
+        return f'{self.holder.expression} {self.parent}{self.name}'
 
 class BoolData(Data):
-    def __init__(self, path:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
-        super().__init__( path,holder,contexts=contexts)
 
+    def _set(self,value:Union[bool,Comparison]):
+        assert type(value) in (bool,Comparison)
+        if type(value) is bool:
+            return '1b' if value else '0b',[]
+        else:
+            return '-2b',[f'data modify {self.expression} set value 0b',f'execute if {value.expression} run data modify {self.expression} set value 1b']
+    
+    def __eq__(self, value: bool):
+        assert type(value) is bool
+        return super().__eq__(str(int(value))+'b')
+    
+    def check_eixst(self):
+        return self.__eq__(True)
 
 class IntData(Data):
-    def __init__(self, path:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
-        super().__init__( path,holder,contexts=contexts)
-
-    # def eval(self):
-    #     return self.subcommand or f'{self.path}{{{self.value}:1b}}'
+    
+    def _set(self,value:Union[int,'Score']):
+        assert type(value) in (int,Score)
+        if type(value) is int:
+            return str(value),[]
+        else:
+            value:Score
+            return '-2b',[f'execute store result {self.expression} int 1 run {value.get().reflesh()}']
 
 class StrData(Data):
-    def __init__(self, path:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
-        super().__init__( path,holder,contexts=contexts)
+
+    def _set(self,value:str):
+        assert type(value) is str
+        return f'"{value}"',[]
 
 
-class Compound(Data):
-    def __init__(self, path:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
-        super().__init__( path,holder,contexts=contexts)
+class Compound(Data,Iterable):
+    def __init__(self, name:str=None, parent:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
+        super().__init__( name,parent,holder,contexts=contexts)
         self.value = {}
 
     # 設定時のパスチェックは行われないので注意
     def setitem(self,key,value):
         self.value[key] = value
 
+    # forで回せるようにtIterable化する        
+    def __iter__(self):
+        return iter(self.value.items())
+
     def __getitem__(self,key):
         return self.value[key]
-    
-    def set(self, value: str):
-        r = super().set(value)
-        return r
 
-# class Comparison(ResultVariable):
-#     def __init__(self, subcommand, contexts: list[Union[str, 'Variable']]) -> None:
-#         context = [f'data modify storage TEST set value 0b',f'execute if {subcommand} run data modify storage TEST set value 1b']
-#         super().__init__(contexts=contexts)
-#         self.subcommand = subcommand
+    def _set(self,value:dict):
+        assert type(value) is dict
+        text    = {}
+        context = []
+        for k,v in value.items():
+            child = self.genInstance('.'+k, self.parent + self.name ,self.holder,v)
+            c_text,c_context = child._set(v)
+            self.value[k] = child
+            text[k] = c_text
+            context.extend(c_context)
+        text = f'{{{ ",".join(f"{k}:{v}" for k,v in text.items()) }}}'
+        return text,context
 
 class ObjectiveError(Exception): pass
 
@@ -374,21 +411,26 @@ class Score(Variable):
     def __iop(self,opstr:str,opsign:str,value:Union[int,'Score']):
         operation = lambda value:f'scoreboard players operation {self.expression} {opsign} {value.expression}'
         if type(value) is Score:
-            return value.contexts + [operation(value)]
-        if opstr:
-            return [f'scoreboard players {opstr} {self.expression} {value}']
+            self.addcontext(value,operation(value))
+        elif opstr:
+            self.addcontext(f'scoreboard players {opstr} {self.expression} {value}')
         else:
             s = Score()
-            return s.set(value) + [operation(s)]
+            s.set(value)
+            self.addcontext(s,operation(s))
+        return ResultVariable(self)
 
     def __op(self,iop:Callable,value):
         new = Score()
-        new.addcontext([new.set(self),iop(new,value)])
+        new.set(self)
+        iop(new,value)
+        new.addcontext(self)
         return new
 
     @command
-    def get(self) -> list[str]:
-        return [f'scoreboard players get {self.expression}']
+    def get(self) -> ResultVariable:
+        # 状態変更ではないので自分自身は渡さない
+        return ResultVariable(f'scoreboard players get {self.expression}')
 
     # def __eq__(self,value:Union[int,'Score']) -> Sou:
     #     new = Score()
@@ -398,56 +440,56 @@ class Score(Variable):
 # 演算子オーバーロード
     @command
     def set(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop('set','=',value)
+        return self.__iop('set','=',value)
 
     @command
     def add(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop('add','+=',value)
+        return self.__iop('add','+=',value)
 
     def __add__(self,value:Union[int,'Score']) -> 'Score':
         return self.__op(Score.add,value)
 
     @command
     def remove(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop('remove','-=',value)
+        return self.__iop('remove','-=',value)
 
     def __sub__(self,value:Union[int,'Score']) -> 'Score':
         return self.__op(Score.remove,value)
 
     @command
     def multiply(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop(None,'*=',value)
+        return self.__iop(None,'*=',value)
 
     def __mul__(self,value:Union[int,'Score']) -> 'Score':
         return self.__op(Score.multiply,value)
 
     @command
     def div(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop(None,'*=',value)
+        return self.__iop(None,'*=',value)
 
     def __floordiv__(self,value:Union[int,'Score']) -> 'Score':
         return self.__op(Score.div,value)
 
     @command
     def mod(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop(None,'*=',value)
+        return self.__iop(None,'*=',value)
 
     def __mod__(self,value:Union[int,'Score']) -> 'Score':
         return self.__op(Score.mod,value)
 
     @command
     def mod(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop(None,'*=',value)
+        return self.__iop(None,'*=',value)
 
     @command
     def max(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop(None,'>',value)
+        return self.__iop(None,'>',value)
 
     @command
     def min(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop(None,'<',value)
+        return self.__iop(None,'<',value)
     
     @command
     def switch(self,value:Union[int,'Score']) -> list[str]:
-        return self.contexts+self.__iop(None,'><',value)
+        return self.__iop(None,'><',value)
 #>
