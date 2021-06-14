@@ -1,8 +1,8 @@
-import mcpath
 from os import name, path
 from typing import Callable, Container, Iterable, TypeVar, Union
 from .id import gen_function_id, gen_objective_id, gen_scoreholder_id, gen_datapath_id
 from .mcpath import McPath
+from .datapath import DataPath
 import re
 
 # モジュール(意味を持ったファンクション群)
@@ -256,14 +256,12 @@ class Data(Variable):
             str:StrData,
             dict:Compound
         }
-    def __init__(self, name:str=None, parent:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
+    def __init__(self, path:DataPath=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
         super().__init__(contexts=contexts)
         # ストレージ名前空間やエンティティ名など
         self.holder = holder
-        # パスの最後の部分( .a [i] [{n=1}])
-        self.name   = name or gen_datapath_id()
-        # パスの最後以外の部分(x.y.z)
-        self.parent = parent or ''
+        # パス
+        self.path   = path or DataPath(gen_datapath_id())
 
         self.value = None
     # # 別のストレージからデータを移動
@@ -278,22 +276,20 @@ class Data(Variable):
         return ResultVariable(self)
 
     @staticmethod
-    def genInstance(name,parent,holder,value) -> 'Data':
+    def genInstance(path,holder,value) -> 'Data':
         return {
             bool:BoolData,
             int:IntData,
             Score:IntData,
             str:StrData,
             dict:Compound
-        }[type(value)](name,parent,holder)
+        }[type(value)](path,holder)
 
     def check_eixst(self):
         return Comparison(f'data {self.expression}',[self])
 
     def __eq__(self,value:str):
-        match = re.fullmatch(r'\[\s*\{(.*)\}\s*\]',value)
-        assert not match, 's.t[{a:x}]に対して同値比較はできません'
-        return Comparison(f'data {self.holder.expression} {self.parent}{{{self.name[1:]}:{value}}}',[self])
+        return Comparison(f'data {self.holder.expression} {self.path.compare(value)}',[self])
 
     # # データを違う場所にコピー
     # def copyWithParent(self,path,holder,parent):
@@ -303,7 +299,7 @@ class Data(Variable):
 
     @property
     def expression(self):
-        return f'{self.holder.expression} {self.parent}{self.name}'
+        return f'{self.holder.expression} {self.path}'
 
 class BoolData(Data):
 
@@ -339,8 +335,8 @@ class StrData(Data):
 
 
 class Compound(Data,Iterable):
-    def __init__(self, name:str=None, parent:str=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
-        super().__init__( name,parent,holder,contexts=contexts)
+    def __init__(self, path:DataPath=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
+        super().__init__( path,holder,contexts=contexts)
         self.value = {}
 
     # 設定時のパスチェックは行われないので注意
@@ -359,7 +355,7 @@ class Compound(Data,Iterable):
         text    = {}
         context = []
         for k,v in value.items():
-            child = self.genInstance('.'+k, self.parent + self.name ,self.holder,v)
+            child = self.genInstance(self.path/f'.{k}' ,self.holder,v)
             c_text,c_context = child._set(v)
             self.value[k] = child
             text[k] = c_text
@@ -406,7 +402,7 @@ class Score(Variable):
     def expression(self):
         return f'{self.name} {self.objective.name}'
     
-    # 演算子のオーバーロードの親定義
+    # 自己代入演算子のオーバーロードの親定義
     @command
     def __iop(self,opstr:str,opsign:str,value:Union[int,'Score']):
         operation = lambda value:f'scoreboard players operation {self.expression} {opsign} {value.expression}'
@@ -420,6 +416,7 @@ class Score(Variable):
             self.addcontext(s,operation(s))
         return ResultVariable(self)
 
+    # 演算の親定義
     def __op(self,iop:Callable,value):
         new = Score()
         new.set(self)

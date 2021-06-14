@@ -1,5 +1,3 @@
-from ast import Index
-from pyDatapack.datapack import Data
 from typing import Union
 import re
 
@@ -18,7 +16,7 @@ class DataPath:
 
         def __repr__(self) -> str:
             return self.value
-    
+        
     class HeadSelector(Part):
         def __init__(self,selector:dict) -> None:
             assert type(selector) is dict
@@ -43,7 +41,7 @@ class DataPath:
             self.selector = selector
         
         def __repr__(self) -> str:
-            return '.' + '{' + ','.join( f'{k}:{v}' for k,v in self.selector.items()) + '}'
+            return self.value + '{' + ','.join( f'{k}:{v}' for k,v in self.selector.items()) + '}'
 
     class Index(Part):
         def __init__(self,value:int) -> None:
@@ -63,18 +61,35 @@ class DataPath:
 
     def __init__(self,path:Union[str,'DataPath']) -> None:
         assert type(path) in (str,DataPath)
-        self.parts = DataPathDecoder(path).parts if type(path) is str else path.parts
-        print(self.parts)
+        self.parts = DataPathDecoder(path).parts if type(path) is str else [*path.parts]
+    
+    def __truediv__(self,value:str):
+        new   = DataPath(self)
+        datavalue = DataPathDecoder(value,False)
+        new.parts.extend(datavalue.parts)
+        return new
+
+    def compare(self,value):
+        new = DataPath(self)
+        tail    = new.parts[-1]
+        if type(tail) is DataPath.Head:
+            new.parts[-1]  = DataPath.HeadSelector({tail.value:value})
+        if type(tail) is DataPath.Child:
+            new.parts[-2:] = [DataPath.ChildWithSelector(new.parts[-2].value,{tail.value:value})]
+        return new
+
+    def __repr__(self):
+        return ''.join(map(str,self.parts))
 
 class DataPathDecodeError(Exception):pass
 
 class DataPathDecoder:
-    def __init__(self,path:str) -> None:
+    def __init__(self,path:str,with_head=True) -> None:
         assert type(path) is str
         self.path  = path
         self.index = 0
         self.length = len(self.path)
-        self.parts = [self.getfirstpart()]
+        self.parts = [self.getfirstpart()] if with_head else []
         while self.index < self.length:
             self.parts.append(self.getpart())
             pass
@@ -143,8 +158,7 @@ class DataPathDecoder:
         match = re.match('\s*', self.path[self.index:])
         self.index += match.span(0)[1]
         return None
-    
-    
+
     def getSelector(self) -> dict:
         assert self.char == '{',self.char
         self.index += 1
@@ -218,6 +232,3 @@ class DataPathDecoder:
         else:
             word = self.getword()
             return word
-
-
-DataPath('a.d.fsa[0]')
