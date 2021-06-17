@@ -7,20 +7,22 @@ from .variables.data import Data
 from .variables.comparison import Comparison
 from .variables.score import Score
 
-# モジュール(意味を持ったファンクション群)
-WORKSPACE:str = None
+class MainModule:   
+    # ワークスペースのMCパス
+    workspace:McPath = None
 
 class pyDatapackError(Exception):pass
 
 # モジュール(意味を持ったファンクション群)
 class Module:
-    def __init__(self, main: 'MainModule', path: str) -> None:
-        if WORKSPACE is None:
-            raise pyDatapackError('set variable "WORKSPACE"(class:Mcpath) first.')
+    def __init__(self, path: str) -> None:
+        if MainModule.workspace is None:
+            raise pyDatapackError('set variable "MainModule.workspace"(class:Mcpath) first.')
+        MainModule.workspace.setDirectory('functions')
 
-        self.path = main.path/path
+        self.path = MainModule.workspace/path
         (self.path/'-').rmtree(ignore_errors=True)
-    
+
     def func(self,name=None):
         return Function(self.path,name)
 
@@ -36,12 +38,12 @@ class MainModule(Module):
             setattr(self,funcname,func)
             self.funcs.append(func)
 
-    def __enter__(self):
-        return self
+#     def __enter__(self):
+#         return self
 
-    def __exit__(self,*args):
-        for func in self.funcs:
-            self > func
+#     def __exit__(self,*args):
+#         for func in self.funcs:
+#             self > func
 
 class CommandAddtionFailed(Exception):pass
 

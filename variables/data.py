@@ -25,10 +25,10 @@ class DataSetError(Exception):pass
 # nbt全般のスーパークラス
 class Data(Variable):
     convertmap = lambda:{
-            bool:BoolData,
-            int:IntData,
-            Score:IntData,
-            str:StrData,
+            bool:Bool,
+            int:Int,
+            Score:Int,
+            str:Str,
             dict:Compound
         }
 
@@ -54,10 +54,10 @@ class Data(Variable):
     @staticmethod
     def genInstance(path,holder,value) -> 'Data':
         return {
-            bool:BoolData,
-            int:IntData,
-            Score:IntData,
-            str:StrData,
+            bool:Bool,
+            int:Int,
+            Score:Int,
+            str:Str,
             dict:Compound
         }[type(value)](path,holder)
 
@@ -77,7 +77,7 @@ class Data(Variable):
     def expression(self):
         return f'{self.holder.expression} {self.datapath}'
 
-class BoolData(Data):
+class Bool(Data):
 
     def _set(self,value:Union[bool,Comparison]):
         assert type(value) in (bool,Comparison)
@@ -93,7 +93,7 @@ class BoolData(Data):
     def check_eixst(self):
         return self.__eq__(True)
 
-class IntData(Data):
+class Int(Data):
     
     def _set(self,value:Union[int,'Score']):
         assert type(value) in (int,Score)
@@ -103,7 +103,7 @@ class IntData(Data):
             value:Score
             return '-2b',[f'execute store result {self.expression} int 1 run {value.get().reflesh()}']
 
-class StrData(Data):
+class Str(Data):
 
     def _set(self,value:str):
         assert type(value) is str
