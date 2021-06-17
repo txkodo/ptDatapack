@@ -1,13 +1,23 @@
-from os import name, path
-from typing import Callable, Container, Iterable, TypeVar, Union
-from .id import gen_function_id, gen_objective_id, gen_scoreholder_id, gen_datapath_id
+from typing import Iterable, Union
+from .id import gen_function_id
 from .mcpath import McPath
-from .datapath import DataPath
-import re
+from .command import isContext
+from .variable import Variable
+from .variables.data import Data
+from .variables.comparison import Comparison
+from .variables.score import Score
+
+# モジュール(意味を持ったファンクション群)
+WORKSPACE:str = None
+
+class pyDatapackError(Exception):pass
 
 # モジュール(意味を持ったファンクション群)
 class Module:
     def __init__(self, main: 'MainModule', path: str) -> None:
+        if WORKSPACE is None:
+            raise pyDatapackError('set variable "WORKSPACE"(class:Mcpath) first.')
+
         self.path = main.path/path
         (self.path/'-').rmtree(ignore_errors=True)
     
@@ -32,49 +42,6 @@ class MainModule(Module):
     def __exit__(self,*args):
         for func in self.funcs:
             self > func
-
-def isContext(context):
-    return type(context) in (str,ResultVariable)
-
-# コマンドの型戻り値をチェックをするデコレータ
-T = TypeVar('T')
-def command(func:T) -> T:
-    def inner(*args,**kwargs) -> 'ResultVariable':
-        result = func(*args,**kwargs)
-        assert isContext(result), f'command must return ResultVariable instance. not {result} in {func}'
-        return result
-    return inner
-
-# スコアやデータ等のスーパークラス
-class Variable:
-    def __init__(self,contexts:list[Union[str,'Variable']]=[]) -> None:
-        self.__contexts = []
-        self.addcontext(*contexts)
-
-    def addcontext(self,*contexts) -> None:
-        commands = []
-        for context in contexts:
-            assert isinstance(context,(str,Variable)),f'str or Variable is allowed in context. not {type(context)}\n{context}.'
-            commands.append(context)
-
-        self.__contexts.extend(commands)
-
-    def reflesh(self) -> list[str]:
-        commands = [] 
-        for context in self.__contexts:
-            if type(context) is str:
-                commands.append(context)
-            elif isinstance(context,Variable):
-                commands.extend(context.reflesh())
-            else:
-                assert False, f'{type(context)} is not allowed in context.'
-
-        self.__contexts = []
-        return commands
-
-class ResultVariable(Variable):
-    def __init__(self, *contexts:Union[str, 'Variable']) -> None:
-        super().__init__(contexts=contexts)
 
 class CommandAddtionFailed(Exception):pass
 
@@ -225,268 +192,3 @@ class SubFunction(Variable):
         # 複数行ファンクションの場合焼き付けてexexcuteから呼び出す
         self.function.bake()
         return ['execute ' + self.subcommand + ' run function ' + (self.function.path).function_path]
-
-# 比較演算結果 execute ifのサブコマンドとなったりBoolDataにキャストしたりできる。
-class Comparison(Variable):
-    def __init__(self, expression:str, contexts: list[Union[str, 'Variable']] = []) -> None:
-        super().__init__(contexts=contexts)
-        self.expression = expression
-
-# ストレージ名前空間
-class StorageNamespace:
-    name_set = set()
-    default:'StorageNamespace'
-    def __init__(self,namespace,id='') -> None:
-        self.namespace = namespace
-        self.id = id
-
-    @property
-    def expression(self):
-        return f'storage {self.namespace}:{self.id}'
-StorageNamespace.default = StorageNamespace('-')
-
-class DataSetError(Exception):pass
-
-# nbt全般のスーパークラス
-class Data(Variable):
-    convertmap = lambda:{
-            bool:BoolData,
-            int:IntData,
-            Score:IntData,
-            str:StrData,
-            dict:Compound
-        }
-    def __init__(self, path:DataPath=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
-        super().__init__(contexts=contexts)
-        # ストレージ名前空間やエンティティ名など
-        self.holder = holder
-        # パス
-        self.path   = path or DataPath(gen_datapath_id())
-
-        self.value = None
-    # # 別のストレージからデータを移動
-    # def move(self,path_from:'Data'):
-    #     self.addcontext([f'data modify {self.expression} set from {path_from.expression}'])
-
-    # データに代入
-    @command
-    def set(self,value):
-        nbtstr,context = self._set(value)
-        self.addcontext(f'data modify {self.expression} set value {nbtstr}',*context)
-        return ResultVariable(self)
-
-    @staticmethod
-    def genInstance(path,holder,value) -> 'Data':
-        return {
-            bool:BoolData,
-            int:IntData,
-            Score:IntData,
-            str:StrData,
-            dict:Compound
-        }[type(value)](path,holder)
-
-    def check_eixst(self):
-        return Comparison(f'data {self.expression}',[self])
-
-    def __eq__(self,value:str):
-        return Comparison(f'data {self.holder.expression} {self.path.compare(value)}',[self])
-
-    # # データを違う場所にコピー
-    # def copyWithParent(self,path,holder,parent):
-    #     if parent:
-    #         path += self.relpath
-    #     return self.__class__(self,path,holder)
-
-    @property
-    def expression(self):
-        return f'{self.holder.expression} {self.path}'
-
-class BoolData(Data):
-
-    def _set(self,value:Union[bool,Comparison]):
-        assert type(value) in (bool,Comparison)
-        if type(value) is bool:
-            return '1b' if value else '0b',[]
-        else:
-            return '-2b',[f'data modify {self.expression} set value 0b',f'execute if {value.expression} run data modify {self.expression} set value 1b']
-    
-    def __eq__(self, value: bool):
-        assert type(value) is bool
-        return super().__eq__(str(int(value))+'b')
-    
-    def check_eixst(self):
-        return self.__eq__(True)
-
-class IntData(Data):
-    
-    def _set(self,value:Union[int,'Score']):
-        assert type(value) in (int,Score)
-        if type(value) is int:
-            return str(value),[]
-        else:
-            value:Score
-            return '-2b',[f'execute store result {self.expression} int 1 run {value.get().reflesh()}']
-
-class StrData(Data):
-
-    def _set(self,value:str):
-        assert type(value) is str
-        return f'"{value}"',[]
-
-
-class Compound(Data,Iterable):
-    def __init__(self, path:DataPath=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
-        super().__init__( path,holder,contexts=contexts)
-        self.value = {}
-
-    # 設定時のパスチェックは行われないので注意
-    def setitem(self,key,value):
-        self.value[key] = value
-
-    # forで回せるようにtIterable化する        
-    def __iter__(self):
-        return iter(self.value.items())
-
-    def __getitem__(self,key):
-        return self.value[key]
-
-    def _set(self,value:dict):
-        assert type(value) is dict
-        text    = {}
-        context = []
-        for k,v in value.items():
-            child = self.genInstance(self.path/f'.{k}' ,self.holder,v)
-            c_text,c_context = child._set(v)
-            self.value[k] = child
-            text[k] = c_text
-            context.extend(c_context)
-        text = f'{{{ ",".join(f"{k}:{v}" for k,v in text.items()) }}}'
-        return text,context
-
-class ObjectiveError(Exception): pass
-
-# Scoreboard Objective
-class Objective:
-    name_set = set()
-    default:'Objective'
-
-    def __new__(cls, name:str = None ) -> 'Objective':
-        if name and name in cls.name_set:
-            raise ObjectiveError(f'Objective "{name}" already exists. Use other name.')
-        cls.name_set.add(name)
-        return super().__new__(cls)
-
-    def __init__(self,name:str = None) -> None:
-        self.name = name or gen_objective_id()
-
-Objective.default = Objective('-')
-
-class ScoreHolderError(Exception):pass
-
-# Scoreboard
-class Score(Variable):
-    name_set = set()
-
-    def __new__(cls, name = None, objective:Objective = None, contexts=[]) -> 'Score':
-        if name and name in cls.name_set:
-            raise ScoreHolderError(f'Score holder "{name}" already exists. Use other name.')
-        cls.name_set.add(name)
-        return super().__new__(cls)
-
-    def __init__(self, name = None, objective:Objective = None, contexts=[]) -> None:
-        super().__init__(contexts=contexts)
-        self.name = name or gen_scoreholder_id()
-        self.objective = objective or Objective.default
-    
-    @property
-    def expression(self):
-        return f'{self.name} {self.objective.name}'
-    
-    # 自己代入演算子のオーバーロードの親定義
-    @command
-    def __iop(self,opstr:str,opsign:str,value:Union[int,'Score']):
-        operation = lambda value:f'scoreboard players operation {self.expression} {opsign} {value.expression}'
-        if type(value) is Score:
-            self.addcontext(value,operation(value))
-        elif opstr:
-            self.addcontext(f'scoreboard players {opstr} {self.expression} {value}')
-        else:
-            s = Score()
-            s.set(value)
-            self.addcontext(s,operation(s))
-        return ResultVariable(self)
-
-    # 演算の親定義
-    def __op(self,iop:Callable,value):
-        new = Score()
-        new.set(self)
-        iop(new,value)
-        new.addcontext(self)
-        return new
-
-    @command
-    def get(self) -> ResultVariable:
-        # 状態変更ではないので自分自身は渡さない
-        return ResultVariable(f'scoreboard players get {self.expression}')
-
-    # def __eq__(self,value:Union[int,'Score']) -> Sou:
-    #     new = Score()
-    #     new.addcontext([new.set(self),new.add(value)])
-    #     return new
-
-# 演算子オーバーロード
-    @command
-    def set(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop('set','=',value)
-
-    @command
-    def add(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop('add','+=',value)
-
-    def __add__(self,value:Union[int,'Score']) -> 'Score':
-        return self.__op(Score.add,value)
-
-    @command
-    def remove(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop('remove','-=',value)
-
-    def __sub__(self,value:Union[int,'Score']) -> 'Score':
-        return self.__op(Score.remove,value)
-
-    @command
-    def multiply(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop(None,'*=',value)
-
-    def __mul__(self,value:Union[int,'Score']) -> 'Score':
-        return self.__op(Score.multiply,value)
-
-    @command
-    def div(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop(None,'*=',value)
-
-    def __floordiv__(self,value:Union[int,'Score']) -> 'Score':
-        return self.__op(Score.div,value)
-
-    @command
-    def mod(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop(None,'*=',value)
-
-    def __mod__(self,value:Union[int,'Score']) -> 'Score':
-        return self.__op(Score.mod,value)
-
-    @command
-    def mod(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop(None,'*=',value)
-
-    @command
-    def max(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop(None,'>',value)
-
-    @command
-    def min(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop(None,'<',value)
-    
-    @command
-    def switch(self,value:Union[int,'Score']) -> list[str]:
-        return self.__iop(None,'><',value)
-#>
