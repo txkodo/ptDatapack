@@ -1,2 +1,2 @@
-# ptDatapack
+# pyDatapack
 gen datapack from pytnon
