@@ -38,7 +38,6 @@ class Data(Variable):
         self.holder = holder
         # パス
         self.datapath   = datapath or DataPath(gen_datapath_id())
-
         self.value = None
     # # 別のストレージからデータを移動
     # def move(self,path_from:'Data'):
@@ -104,22 +103,22 @@ class Int(Data):
             return '-2b',[f'execute store result {self.expression} int 1 run {value.get().reflesh()}']
 
 class Str(Data):
-
     def _set(self,value:str):
         assert type(value) is str
         return f'"{value}"',[]
 
-
 class Compound(Data,Iterable):
-    def __init__(self, path:DataPath=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[]) -> None:
-        super().__init__( path,holder,contexts=contexts)
+    def __init__(self, annotation:dict[str,Union[type,dict]]={}, datapath:DataPath=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[],frozen = False) -> None:
+        super().__init__( datapath,holder,contexts=contexts)
+        self.frozen = frozen
         self.value = {}
+        for k,v in annotation.items():
+            if type(v) is dict:
+                self.value[k] = Compound(v,self.datapath/f'.{k}',holder,contexts)
+            else:
+                self.value[k] = v(self.datapath/f'.{k}',holder,contexts)
 
-    # 設定時のパスチェックは行われないので注意
-    def setitem(self,key,value):
-        self.value[key] = value
-
-    # forで回せるようにtIterable化する        
+    # forで回せるようにIterable化する        
     def __iter__(self):
         return iter(self.value.items())
 
@@ -133,6 +132,11 @@ class Compound(Data,Iterable):
         for k,v in value.items():
             child = self.genInstance(self.datapath/f'.{k}' ,self.holder,v)
             c_text,c_context = child._set(v)
+            if k in self.value:
+                if type(self.value[k]) is not type(child):
+                    raise TypeError(f'Compound value pair to key "{k}" annotated to be type "{type(self.value[k])}" not "{type(child)}"')
+            elif self.frozen:
+                raise KeyError(f'failed to add compound key "{k}". This compound tag is frozen.')
             self.value[k] = child
             text[k] = c_text
             context.extend(c_context)

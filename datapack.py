@@ -11,6 +11,10 @@ class MainModule:
     # ワークスペースのMCパス
     workspace:McPath = None
 
+    @staticmethod
+    def func(name=None):
+        return Function(MainModule.workspace,name)
+
 class pyDatapackError(Exception):pass
 
 # モジュール(意味を持ったファンクション群)
@@ -26,18 +30,6 @@ class Module:
     def func(self,name=None):
         return Function(self.path,name)
 
-# 名前空間オブジェクト
-class MainModule(Module):
-    def __init__(self, path: McPath,funcnames:Iterable=[]) -> None:
-        path.setDirectory('functions')
-        self.path = path
-        (self.path/'-').rmtree(ignore_errors=True)
-        self.funcs:list[Function] = []
-        for funcname in funcnames:
-            func = self.func(funcname)
-            setattr(self,funcname,func)
-            self.funcs.append(func)
-
 #     def __enter__(self):
 #         return self
 
@@ -49,7 +41,6 @@ class CommandAddtionFailed(Exception):pass
 
 # ファンクション
 class Function(Variable):
-    called = set()
     def __init__(self,path:McPath,name:str=None,contexts=[]) -> None:
         super().__init__(contexts=contexts)
         self.commands:list[Union[str,Function]] = []
