@@ -1,4 +1,4 @@
-from typing import Iterable, Union
+from typing import Union
 from .id import gen_function_id
 from .mcpath import McPath
 from .command import isContext
@@ -7,7 +7,7 @@ from .variables.data import Data,Compound
 from .variables.comparison import Comparison
 from .variables.score import Score
 
-class MainModule:   
+class MainModule:
     # ワークスペースのMCパス
     workspace:McPath = None
 
@@ -30,6 +30,8 @@ class Module:
         self.data = Compound(data_annotation)
 
     def func(self,name=None):
+        if name is None:
+            return Function(MainModule.workspace,name)
         return Function(self.path,name)
 
 #     def __enter__(self):
@@ -51,6 +53,11 @@ class Function(Variable):
         self.hasname = bool(name)
         self.name = (name or ( '-/' + gen_function_id())) + '.mcfunction'
         self.path = path/self.name
+
+    # def __repr__(self) -> str:
+    #     if self.commands:
+    #         return '\n'.join( '  ' + y for x in ['|'] + self.commands for y in str(x).split('\n') )
+    #     return '  pass'
 
     def __lt__(self,value:Module):
         self.bake()
@@ -175,6 +182,9 @@ class SubFunction(Variable):
         super().__init__(contexts=contexts)
         self.function = function
         self.subcommand = subcommand
+
+    # def __repr__(self) -> str:
+    #     return f'  |{self.subcommand}\n' + str(self.function)[4:]
 
     def call(self):
         texts = self.function.textify()
