@@ -3,7 +3,7 @@ from .id import gen_function_id
 from .mcpath import McPath
 from .command import isContext
 from .variable import Variable
-from .variables.data import Data
+from .variables.data import Data,Compound
 from .variables.comparison import Comparison
 from .variables.score import Score
 
@@ -19,13 +19,15 @@ class pyDatapackError(Exception):pass
 
 # モジュール(意味を持ったファンクション群)
 class Module:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, data_annotation:dict = {} ) -> None:
         if MainModule.workspace is None:
             raise pyDatapackError('set variable "MainModule.workspace"(class:Mcpath) first.')
         MainModule.workspace.setDirectory('functions')
 
         self.path = MainModule.workspace/path
         (self.path/'-').rmtree(ignore_errors=True)
+
+        self.data = Compound(data_annotation)
 
     def func(self,name=None):
         return Function(self.path,name)

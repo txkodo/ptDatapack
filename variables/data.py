@@ -111,18 +111,25 @@ class Compound(Data,Iterable):
     def __init__(self, annotation:dict[str,Union[type,dict]]={}, datapath:DataPath=None, holder:StorageNamespace=StorageNamespace.default, contexts: list[Union[str, 'Variable']]=[],frozen = False) -> None:
         super().__init__( datapath,holder,contexts=contexts)
         self.frozen = frozen
-        self.value = {}
+        self.value:dict[str,Data] = {}
         for k,v in annotation.items():
             if type(v) is dict:
                 self.value[k] = Compound(v,self.datapath/f'.{k}',holder,contexts)
             else:
                 self.value[k] = v(self.datapath/f'.{k}',holder,contexts)
+    
+    # def annotate(self,annotation:dict[str,Union[type,dict]]):
+    #     for k,v in annotation.items():
+    #         if type(v) is dict:
+    #             self.value[k] = Compound(v,self.datapath/f'.{k}', self.holder,self.__contexts)
+    #         else:
+    #             self.value[k] = v(self.datapath/f'.{k}', self.holder,self.__contexts)
 
     # forで回せるようにIterable化する        
     def __iter__(self):
         return iter(self.value.items())
 
-    def __getitem__(self,key):
+    def __getitem__(self,key) -> Data:
         return self.value[key]
 
     def _set(self,value:dict):
